@@ -11,7 +11,7 @@
 #define SCK_PIN       16
 #define FLIR_NCS_PIN  5
 
-static const int spiClk = 20000000; // 16 MHz, min is 2.2, max 20. the one article i found used 16
+static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20. the one article i found used 16
 
 #define I2C_SDA_PIN   2
 #define I2C_SCL_PIN   15
