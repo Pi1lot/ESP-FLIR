@@ -4,16 +4,21 @@
 
 #include <SPI.h>
 #include <Wire.h>
-// #include <LeptonFLiR.h>
+
+// NOTE: ALL COLORS MUST BE SUBTRACTED FROM 0xFFFF (inverted) TO MAINTAIN COMPATIBILITY WITH THIS LIBRARY
+#include <TFT_eSPI.h>
+
+// #include "EXAMPLE.h"  // Stores pre-recorded data from the sensor
+
 
 #define MISO_PIN      19
 #define MOSI_PIN      23 // This is ignored by the module and can be left N/C
 #define SCK_PIN       16
 #define FLIR_NCS_PIN  5
 
-static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20. the one article i found used 16
+static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20.
 
-#define I2C_SDA_PIN   2
+#define I2C_SDA_PIN   17
 #define I2C_SCL_PIN   15
 #define ADDRESS       0x2A
 
@@ -21,6 +26,8 @@ static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20. the one artic
 uint16_t lepton_frame_packet[VOSPI_FRAME_SIZE / 2];
 uint16_t lepton_frame_segment[60][VOSPI_FRAME_SIZE / 2]; // 60 packets per segment
 
+
+TFT_eSPI ips = TFT_eSPI();
 
 
 //defining variables related with the image
@@ -52,8 +59,7 @@ void setup() {
   Wire.setClock(400000);
   bool isBusy = true;
   do {
-    int status = readRegister
-    (0x0002);
+    int status = readRegister(0x0002);
     if(!(status & 0b100) & (status & 0b1)){
       Serial.println("I2C is busy.");
       delay(1000);
@@ -61,12 +67,19 @@ void setup() {
       isBusy = false;
     }
   } while (isBusy);
+
+  ips.init();
+  ips.setRotation(2);
+  ips.fillScreen(0xFFFF-TFT_BLACK);
 }
 
 void loop() {
   captureImage();
-  transferImage();
-  delay(1000);
+
+  displayImage();
+
+  // transferImage();
+  delay(200);
 }
 
 void leptonSync(void){
@@ -106,7 +119,56 @@ void printBin(byte aByte) {
   }
 }
 
+
+void displayImage( void ) {
+  double min, max;
+  max = min = image[0][0];
+  for (int i = 0; i < image_x; i++) {
+    for (int j = 0; j < image_y; j++) {
+      if (image[i][j] > max) {
+        max = image[i][j];
+      }
+      if (image[i][j] < min) {
+        min = image[i][j];
+      }
+    }
+  }
+
+  for (int i = 0; i < 160; i++) {
+    for (int j = 0; j < 120; j++) {
+      double val = (image[i][j] - min) / (max - min);
+      int color;
+      if (val == 1.0){
+        color = 0x0000;
+      } else if (val == 0) {
+        color = ips.color565(0,255,0);
+      } else {
+        color = 0xFFFF - ips.color565(255 * val,0, 255 *(1 - val));
+      }
+      if (i < 40) {
+        if (j > 103) {
+          continue;
+        }
+      }
+      
+      ips.drawPixel(2 * i,2 * j, color);
+      // ips.drawPixel(2 * i + 1, 2 * j, color);
+      // ips.drawPixel(2 * i, 2 * j + 1, color);
+      ips.drawPixel(2 * i + 1, 2 * j + 1, color);
+    }
+  }
+
+  ips.setCursor(0, 210, 2);
+  ips.setTextColor(0xFFFF - TFT_WHITE, 0xFFFF - TFT_BLACK);
+  ips.setTextColor(1);
+  ips.print("Max: "); ips.println("25 C");
+  ips.print("Min: "); ips.print("-3 C");
+}
+
 void captureImage( void ) {
+  
+  hspi->setDataMode(SPI_MODE3);
+
   leptonSync();
   delay(50);
   
@@ -149,6 +211,10 @@ void captureImage( void ) {
 
     if (segmentNumber != 0){ // if the segment is number 0, ignore the segment
       Serial.println(segmentNumber);
+      if (segmentNumber > 4) {
+        leptonSync();
+        break;
+      }
       collectedSegments[segmentNumber - 1] = true;
 
       for (int packetNumber = 0; packetNumber < 60; packetNumber++) {
@@ -167,10 +233,13 @@ void captureImage( void ) {
     }
   }
   Serial.println("Image Complete");
+
+  
+  hspi->setDataMode(SPI_MODE0);
 }
 
 void transferImage( void ) {
-  int divider = 1;
+  int divider = 4;
   for(int i=0; i < image_y / divider; i++){
     for(int j=0; j < image_x / divider; j++){
       Serial.print((int)image[j * divider][i * divider], DEC);
