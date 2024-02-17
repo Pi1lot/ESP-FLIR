@@ -1,38 +1,27 @@
-/* used with an ESP-WROOM-32 dev board to interface with a FLIR Lepton 3.5 dev module. 
+/* Used with an ESP-WROOM-32 dev board to interface with a FLIR Lepton 3.5 dev module. 
  * This program will use the HSPI bus on the dev board.
+ *
+ * As of current state, this program will not be finished. It will instead be ported to
+ * work with a Teensy 4.1.
+ *
+ * This is because the ESP-WROOM-32 does not have enough RAM to hold the full size
+ * 16 bit color depth frame buffer at the same time as the pixel data for every 
+ * pixel in the 160x120 frame. This is an absolute requirement to be able to properly
+ * calculate the upper and lower bounds for colors to display on the screen.
+ * 
+ * The program could feasibly be finished to work with an ESP-WROOM-32 under the memory
+ * constraints, but this would require either the addition of an external SRAM module,
+ * or modification of the TFT_eSPI library to accompany pushing scaled sprites to the
+ * screen, which at the time of writing (2/17/2024) is not natively supported.
  */
 
 #include <SPI.h>
 #include <Wire.h>
 
 // NOTE: ALL COLORS MUST BE SUBTRACTED FROM 0xFFFF (inverted) TO MAINTAIN COMPATIBILITY WITH THIS LIBRARY
+// NOTE: Within the config file, the SPI frequency for this library must be set to 20 MHz. Higher frequencies
+//       have caused issues.
 #include <TFT_eSPI.h>
-
-
-// #include "EXAMPLE.h"  // Stores pre-recorded data from the sensor
-
-
-                             /*  r     g    b */
-#define BLACK        0x0000  /*   0,   0,   0 */
-#define BLUE         0x001F  /*   0,   0, 255 */
-#define RED          0xF800  /* 255,   0,   0 */
-#define GREEN        0x07E0  /*   0, 255,   0 */
-#define CYAN         0x07FF  /*   0, 255, 255 */
-#define MAGENTA      0xF81F  /* 255,   0, 255 */
-#define YELLOW       0xFFE0  /* 255, 255,   0 */
-#define WHITE        0xFFFF  /* 255, 255, 255 */
-#define NAVY         0x000F  /*   0,   0, 128 */
-#define DARKGREEN    0x03E0  /*   0, 128,   0 */
-#define DARKCYAN     0x03EF  /*   0, 128, 128 */
-#define MAROON       0x7800  /* 128,   0,   0 */
-#define PURPLE       0x780F  /* 128,   0, 128 */
-#define OLIVE        0x7BE0  /* 128, 128,   0 */
-#define LIGHTGREY    0xC618  /* 192, 192, 192 */
-#define DARKGREY     0x7BEF  /* 128, 128, 128 */
-#define ORANGE       0xFD20  /* 255, 165,   0 */
-#define GREENYELLOW  0xAFE5  /* 173, 255,  47 */
-#define PINK         0xF81F  /* 255,   0, 255 */
-
 
 #define MISO_PIN      19
 #define MOSI_PIN      23 // This is ignored by the module and can be left N/C
@@ -40,6 +29,9 @@
 #define FLIR_NCS_PIN  5
 
 static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20.
+
+// SPI bus which will implement the Lepton VOSPI
+SPIClass * hspi = NULL;
 
 #define I2C_SDA_PIN   17
 #define I2C_SCL_PIN   15
@@ -49,13 +41,6 @@ static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20.
 uint16_t lepton_frame_packet[VOSPI_FRAME_SIZE / 2];
 uint16_t lepton_frame_segment[60][VOSPI_FRAME_SIZE / 2]; // 60 packets per segment
 
-
-TFT_eSPI ips = TFT_eSPI();
-TFT_eSprite spr = TFT_eSprite(&ips);
-
-double max_temp = 0;
-double min_temp = 0;
-
 //defining variables related with the image
 int image_index;
 #define image_x (160)
@@ -63,54 +48,11 @@ int image_index;
 uint16_t image[image_x][image_y];
 bool doneCapturing = 0;
 
-// SPI bus which will implement the Lepton VOSPI
-SPIClass * hspi = NULL;
+TFT_eSPI ips = TFT_eSPI();
+TFT_eSprite spr = TFT_eSprite(&ips);
 
-void setup() {
-
-  // Setup the hspi bus
-  hspi = new SPIClass(HSPI);
-  hspi->begin(SCK_PIN, MISO_PIN, MOSI_PIN, FLIR_NCS_PIN);
-  hspi->setDataMode(SPI_MODE3);
-  pinMode(FLIR_NCS_PIN, OUTPUT);
-
-  // Initialize serial port
-  Serial.begin(115200);
-
-  // Add delay needed for lepton setup
-  delay(7000);
-
-  // Set up i2c on alternate pins, 400kHz baud
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Wire.setClock(400000);
-  bool isBusy = true;
-  do {
-    int status = readRegister(0x0002);
-    if(!(status & 0b100) & (status & 0b1)){
-      Serial.println("I2C is busy.");
-      delay(1000);
-    } else {
-      isBusy = false;
-    }
-  } while (isBusy);
-
-  ips.init();
-  ips.setRotation(2);
-
-  spr.createSprite(image_x, image_y);
-
-  ips.fillScreen(0xFFFF-TFT_BLACK);
-}
-
-void loop() {
-
-  captureImage();
-
-  displayImage();
-
-  // transferImage();
-  delay(200);
-}
+double max_temp = 0;
+double min_temp = 0;
 
 void leptonSync(void){
   int i;
@@ -141,74 +83,6 @@ void leptonSync(void){
     
     hspi->endTransaction();
   }
-}
-
-void printBin(byte aByte) {
-  for (int8_t aBit = 7; aBit >= 0; aBit--) {
-    Serial.write(bitRead(aByte, aBit) ? '1' : '0');
-  }
-}
-
-
-void displayImage( void ) {
-  
-  // hspi->setFrequency(80000000);
-  double min, max;
-  max = min = image[0][0];
-  for (int i = 0; i < image_x; i++) {
-    for (int j = 0; j < image_y; j++) {
-      if (image[i][j] > max) {
-        max = image[i][j];
-      }
-      if (image[i][j] < min) {
-        min = image[i][j];
-      }
-    }
-  }
-
-  max_temp = min_temp = (double)(image[0][0]) / 65535;
-
-  for (int i = 0; i < 160; i++) {
-    for (int j = 0; j < 120; j++) {
-      double val = (image[i][j] - min) / (max - min);
-      int color;
-      if (val == 1.0){
-        color = 0x0000;
-      } else if (val == 0) {
-        color = ips.color565(0,255,0);
-      } else {
-        color = 0xFFFF - ips.color565(255 * val,0, 255 *(1 - val));
-      }
-      if ((double)(image[i][j]) / 65535 > max_temp){
-        max_temp = (double)(image[i][j]) / 65535;
-      }
-      if ((double)(image[i][j]) / 65535 < min_temp){
-        min_temp = (double)(image[i][j]) / 65535;
-      }
-      // if (i < 40) {
-      //   if (j > 103) {
-      //     color = WHITE;
-      //   }
-      // }
-      
-
-      spr.drawPixel(i,j, color);
-      // spr.drawPixel(2 * i, 2 * j,color);
-      // spr.drawPixel(2 * i + 1, 2 * j, color);
-      // spr.drawPixel(2 * i, 2 * j + 1, color);
-      // spr.drawPixel(2 * i + 1, 2 * j + 1, color);
-    }
-  }
-
-
-  // ips.fillScreen(WHITE);
-  spr.pushSprite(0,0);
-  
-  ips.setCursor(0, 210, 2);
-  ips.setTextColor(0xFFFF - TFT_WHITE, 0xFFFF - TFT_BLACK);
-  ips.setTextColor(1);
-  ips.println("Max: " + String(max_temp) + " C");
-  ips.print("Min: " + String(min_temp) + " C");
 }
 
 void captureImage( void ) {
@@ -293,9 +167,76 @@ void captureImage( void ) {
     }
   }
   // Serial.println("Image Complete");
+  hspi->setDataMode(SPI_MODE0);
+}
+
+void displayImage( void ) {
+  
+  // hspi->setFrequency(80000000);
+  double min, max;
+  max = min = image[0][0];
+  for (int i = 0; i < image_x; i++) {
+    for (int j = 0; j < image_y; j++) {
+      if (image[i][j] > max) {
+        max = image[i][j];
+      }
+      if (image[i][j] < min) {
+        min = image[i][j];
+      }
+    }
+  }
+
+  max_temp = min_temp = (double)(image[0][0]) / 65535;
+
+  for (int i = 0; i < 160; i++) {
+    for (int j = 0; j < 120; j++) {
+      double val = (image[i][j] - min) / (max - min);
+      int color;
+      if (val == 1.0){
+        color = 0x0000;
+      } else if (val == 0) {
+        color = ips.color565(0,255,0);
+      } else {
+        color = 0xFFFF - ips.color565(255 * val,0, 255 *(1 - val));
+      }
+      if ((double)(image[i][j]) / 65535 > max_temp){
+        max_temp = (double)(image[i][j]) / 65535;
+      }
+      if ((double)(image[i][j]) / 65535 < min_temp){
+        min_temp = (double)(image[i][j]) / 65535;
+      }
+      // if (i < 40) {
+      //   if (j > 103) {
+      //     color = WHITE;
+      //   }
+      // }
+      
+
+      spr.drawPixel(i,j, color);
+      // spr.drawPixel(2 * i, 2 * j,color);
+      // spr.drawPixel(2 * i + 1, 2 * j, color);
+      // spr.drawPixel(2 * i, 2 * j + 1, color);
+      // spr.drawPixel(2 * i + 1, 2 * j + 1, color);
+    }
+  }
+
+
+  // ips.fillScreen(WHITE);
+  spr.pushSprite(0,0);
+  
+  ips.setCursor(0, 210, 2);
+  ips.setTextColor(0xFFFF - TFT_WHITE, 0xFFFF - TFT_BLACK);
+  ips.setTextColor(1);
+  ips.println("Max: " + String(max_temp) + " C");
+  ips.print("Min: " + String(min_temp) + " C");
 
   
-  hspi->setDataMode(SPI_MODE0);
+}
+
+void printBin(byte aByte) {
+  for (int8_t aBit = 7; aBit >= 0; aBit--) {
+    Serial.write(bitRead(aByte, aBit) ? '1' : '0');
+  }
 }
 
 void transferImage( void ) {
@@ -355,4 +296,54 @@ void setRegister( unsigned int reg ) {
   //   Serial.println(error);
   // }
 }
+
+void setup() {
+
+  // Setup the hspi bus
+  hspi = new SPIClass(HSPI);
+  hspi->begin(SCK_PIN, MISO_PIN, MOSI_PIN, FLIR_NCS_PIN);
+  hspi->setDataMode(SPI_MODE3);
+  pinMode(FLIR_NCS_PIN, OUTPUT);
+
+  // Initialize serial port
+  Serial.begin(115200);
+
+  // Add delay needed for lepton setup
+  delay(7000);
+
+  // Set up i2c on alternate pins, 400kHz baud
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(400000);
+  bool isBusy = true;
+  do {
+    int status = readRegister(0x0002);
+    if(!(status & 0b100) & (status & 0b1)){
+      Serial.println("I2C is busy.");
+      delay(1000);
+    } else {
+      isBusy = false;
+    }
+  } while (isBusy);
+
+  ips.init();
+  ips.setRotation(2);
+
+  spr.createSprite(image_x, image_y);
+
+  ips.fillScreen(0xFFFF-TFT_BLACK);
+}
+
+void loop() {
+
+  captureImage();
+
+  displayImage();
+
+  // transferImage();
+  delay(200);
+}
+
+
+
+
 
