@@ -8,7 +8,30 @@
 // NOTE: ALL COLORS MUST BE SUBTRACTED FROM 0xFFFF (inverted) TO MAINTAIN COMPATIBILITY WITH THIS LIBRARY
 #include <TFT_eSPI.h>
 
+
 // #include "EXAMPLE.h"  // Stores pre-recorded data from the sensor
+
+
+                             /*  r     g    b */
+#define BLACK        0x0000  /*   0,   0,   0 */
+#define BLUE         0x001F  /*   0,   0, 255 */
+#define RED          0xF800  /* 255,   0,   0 */
+#define GREEN        0x07E0  /*   0, 255,   0 */
+#define CYAN         0x07FF  /*   0, 255, 255 */
+#define MAGENTA      0xF81F  /* 255,   0, 255 */
+#define YELLOW       0xFFE0  /* 255, 255,   0 */
+#define WHITE        0xFFFF  /* 255, 255, 255 */
+#define NAVY         0x000F  /*   0,   0, 128 */
+#define DARKGREEN    0x03E0  /*   0, 128,   0 */
+#define DARKCYAN     0x03EF  /*   0, 128, 128 */
+#define MAROON       0x7800  /* 128,   0,   0 */
+#define PURPLE       0x780F  /* 128,   0, 128 */
+#define OLIVE        0x7BE0  /* 128, 128,   0 */
+#define LIGHTGREY    0xC618  /* 192, 192, 192 */
+#define DARKGREY     0x7BEF  /* 128, 128, 128 */
+#define ORANGE       0xFD20  /* 255, 165,   0 */
+#define GREENYELLOW  0xAFE5  /* 173, 255,  47 */
+#define PINK         0xF81F  /* 255,   0, 255 */
 
 
 #define MISO_PIN      19
@@ -28,13 +51,16 @@ uint16_t lepton_frame_segment[60][VOSPI_FRAME_SIZE / 2]; // 60 packets per segme
 
 
 TFT_eSPI ips = TFT_eSPI();
+TFT_eSprite spr = TFT_eSprite(&ips);
 
+double max_temp = 0;
+double min_temp = 0;
 
 //defining variables related with the image
 int image_index;
 #define image_x (160)
 #define image_y (120)
-int image[image_x][image_y];
+uint16_t image[image_x][image_y];
 bool doneCapturing = 0;
 
 // SPI bus which will implement the Lepton VOSPI
@@ -70,10 +96,14 @@ void setup() {
 
   ips.init();
   ips.setRotation(2);
+
+  spr.createSprite(image_x, image_y);
+
   ips.fillScreen(0xFFFF-TFT_BLACK);
 }
 
 void loop() {
+
   captureImage();
 
   displayImage();
@@ -121,6 +151,8 @@ void printBin(byte aByte) {
 
 
 void displayImage( void ) {
+  
+  // hspi->setFrequency(80000000);
   double min, max;
   max = min = image[0][0];
   for (int i = 0; i < image_x; i++) {
@@ -134,6 +166,8 @@ void displayImage( void ) {
     }
   }
 
+  max_temp = min_temp = (double)(image[0][0]) / 65535;
+
   for (int i = 0; i < 160; i++) {
     for (int j = 0; j < 120; j++) {
       double val = (image[i][j] - min) / (max - min);
@@ -145,29 +179,42 @@ void displayImage( void ) {
       } else {
         color = 0xFFFF - ips.color565(255 * val,0, 255 *(1 - val));
       }
-      if (i < 40) {
-        if (j > 103) {
-          continue;
-        }
+      if ((double)(image[i][j]) / 65535 > max_temp){
+        max_temp = (double)(image[i][j]) / 65535;
       }
+      if ((double)(image[i][j]) / 65535 < min_temp){
+        min_temp = (double)(image[i][j]) / 65535;
+      }
+      // if (i < 40) {
+      //   if (j > 103) {
+      //     color = WHITE;
+      //   }
+      // }
       
-      ips.drawPixel(2 * i,2 * j, color);
-      // ips.drawPixel(2 * i + 1, 2 * j, color);
-      // ips.drawPixel(2 * i, 2 * j + 1, color);
-      ips.drawPixel(2 * i + 1, 2 * j + 1, color);
+
+      spr.drawPixel(i,j, color);
+      // spr.drawPixel(2 * i, 2 * j,color);
+      // spr.drawPixel(2 * i + 1, 2 * j, color);
+      // spr.drawPixel(2 * i, 2 * j + 1, color);
+      // spr.drawPixel(2 * i + 1, 2 * j + 1, color);
     }
   }
 
+
+  // ips.fillScreen(WHITE);
+  spr.pushSprite(0,0);
+  
   ips.setCursor(0, 210, 2);
   ips.setTextColor(0xFFFF - TFT_WHITE, 0xFFFF - TFT_BLACK);
   ips.setTextColor(1);
-  ips.print("Max: "); ips.println("25 C");
-  ips.print("Min: "); ips.print("-3 C");
+  ips.println("Max: " + String(max_temp) + " C");
+  ips.print("Min: " + String(min_temp) + " C");
 }
 
 void captureImage( void ) {
   
   hspi->setDataMode(SPI_MODE3);
+  hspi->setFrequency(20000000);
 
   leptonSync();
   delay(50);
@@ -178,11 +225,12 @@ void captureImage( void ) {
   collectedSegments[2] = false;
   collectedSegments[3] = false;
   uint8_t lastFoundSegment = 0;
+  uint8_t segmentsRead = 0;
 
   while(!collectedSegments[0] | !collectedSegments[1] | !collectedSegments[2] | !collectedSegments[3]){
-      
+    
     // Get 60 valid packets per segment
-    digitalWrite(13, LOW); // Debug indicator
+    // digitalWrite(13, LOW); // Debug indicator
     for (int packetNumber = 0; packetNumber < 60; packetNumber++){
       do {
         digitalWrite(FLIR_NCS_PIN, LOW);  
@@ -203,14 +251,26 @@ void captureImage( void ) {
         lepton_frame_segment[packetNumber][i] = lepton_frame_packet[i];
       }
     }
-    digitalWrite(13,HIGH); // Debug indicator
+    // digitalWrite(13,HIGH); // Debug indicator
 
     // Load the collected segment into the image after it's all been captured
     
     int segmentNumber = (lepton_frame_segment[20][0] >> 12) & 0b0111; // This should give the segment number which is held at packet 20. The transmitted packets start at number 0.
 
     if (segmentNumber != 0){ // if the segment is number 0, ignore the segment
-      Serial.println(segmentNumber);
+      segmentsRead++;
+      if (segmentsRead >= 6) { // This means that we're probably out of sync for some reason
+        collectedSegments[0] = false;
+        collectedSegments[1] = false;
+        collectedSegments[2] = false;
+        collectedSegments[3] = false;
+        lastFoundSegment = 0;
+        segmentsRead = 0;
+        leptonSync();
+        break;
+      }
+
+      // Serial.println(segmentNumber);
       if (segmentNumber > 4) {
         leptonSync();
         break;
@@ -232,7 +292,7 @@ void captureImage( void ) {
       } 
     }
   }
-  Serial.println("Image Complete");
+  // Serial.println("Image Complete");
 
   
   hspi->setDataMode(SPI_MODE0);
