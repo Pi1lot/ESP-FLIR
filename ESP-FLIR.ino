@@ -1,13 +1,13 @@
 /* Used with an ESP-WROOM-32 dev board to interface with a FLIR Lepton 3.5 dev module. 
- * This program will use the HSPI bus on the dev board.
- *
+ * 
  * As of current state, this program will not be finished. It will instead be ported to
  * work with a Teensy 4.1.
  *
  * This is because the ESP-WROOM-32 does not have enough RAM to hold the full size
- * 16 bit color depth frame buffer at the same time as the pixel data for every 
+ * 16-bit color depth frame buffer at the same time as the pixel data for every 
  * pixel in the 160x120 frame. This is an absolute requirement to be able to properly
- * calculate the upper and lower bounds for colors to display on the screen.
+ * calculate the upper and lower bounds for colors to display on the screen. At the 
+ * present, this program only displays the data in 8-bit color depth.
  * 
  * The program could feasibly be finished to work with an ESP-WROOM-32 under the memory
  * constraints, but this would require either the addition of an external SRAM module,
@@ -18,7 +18,6 @@
 #include <SPI.h>
 #include <Wire.h>
 
-// NOTE: ALL COLORS MUST BE SUBTRACTED FROM 0xFFFF (inverted) TO MAINTAIN COMPATIBILITY WITH THIS LIBRARY
 // NOTE: Within the config file, the SPI frequency for this library must be set to 20 MHz. Higher frequencies
 //       have caused issues.
 #include <TFT_eSPI.h>
@@ -28,7 +27,7 @@
 #define SCK_PIN       16
 #define FLIR_NCS_PIN  5
 
-static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20.
+static const int spiClk = 20000000; // 20 MHz, min is 2.2, max 20 for the Lepton 3.5 module.
 
 // SPI bus which will implement the Lepton VOSPI
 SPIClass * hspi = NULL;
@@ -170,9 +169,12 @@ void captureImage( void ) {
   hspi->setDataMode(SPI_MODE0);
 }
 
+void jank_pushDoubledImage( void ){
+  spr.pushImage(0,0,320,240, *image);
+}
+
 void displayImage( void ) {
   
-  // hspi->setFrequency(80000000);
   double min, max;
   max = min = image[0][0];
   for (int i = 0; i < image_x; i++) {
@@ -193,11 +195,11 @@ void displayImage( void ) {
       double val = (image[i][j] - min) / (max - min);
       int color;
       if (val == 1.0){
-        color = 0x0000;
+        color = TFT_WHITE;
       } else if (val == 0) {
-        color = ips.color565(0,255,0);
+        color = TFT_WHITE;
       } else {
-        color = 0xFFFF - ips.color565(255 * val,0, 255 *(1 - val));
+        color = ips.color565(255 * val,0, 255 *(1 - val));
       }
       if ((double)(image[i][j]) / 65535 > max_temp){
         max_temp = (double)(image[i][j]) / 65535;
@@ -205,18 +207,11 @@ void displayImage( void ) {
       if ((double)(image[i][j]) / 65535 < min_temp){
         min_temp = (double)(image[i][j]) / 65535;
       }
-      // if (i < 40) {
-      //   if (j > 103) {
-      //     color = WHITE;
-      //   }
-      // }
-      
 
-      spr.drawPixel(i,j, color);
-      // spr.drawPixel(2 * i, 2 * j,color);
-      // spr.drawPixel(2 * i + 1, 2 * j, color);
-      // spr.drawPixel(2 * i, 2 * j + 1, color);
-      // spr.drawPixel(2 * i + 1, 2 * j + 1, color);
+      spr.drawPixel(2 * i, 2 * j,color);
+      spr.drawPixel(2 * i + 1, 2 * j, color);
+      spr.drawPixel(2 * i, 2 * j + 1, color);
+      spr.drawPixel(2 * i + 1, 2 * j + 1, color);
     }
   }
 
@@ -225,12 +220,9 @@ void displayImage( void ) {
   spr.pushSprite(0,0);
   
   ips.setCursor(0, 210, 2);
-  ips.setTextColor(0xFFFF - TFT_WHITE, 0xFFFF - TFT_BLACK);
-  ips.setTextColor(1);
+  ips.setTextColor(TFT_WHITE,TFT_BLACK);
   ips.println("Max: " + String(max_temp) + " C");
-  ips.print("Min: " + String(min_temp) + " C");
-
-  
+  ips.print("Min: " + String(min_temp) + " C");  
 }
 
 void printBin(byte aByte) {
@@ -326,11 +318,13 @@ void setup() {
   } while (isBusy);
 
   ips.init();
-  ips.setRotation(2);
+  ips.setRotation(3);
 
-  spr.createSprite(image_x, image_y);
+  spr.setColorDepth(8); // This has to be done because of RAM limitations
+  spr.createSprite(2*image_x, 2*image_y);
 
-  ips.fillScreen(0xFFFF-TFT_BLACK);
+  ips.invertDisplay( true );
+  ips.fillScreen(TFT_BLACK);
 }
 
 void loop() {
