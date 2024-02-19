@@ -169,9 +169,6 @@ void captureImage( void ) {
   hspi->setDataMode(SPI_MODE0);
 }
 
-void jank_pushDoubledImage( void ){
-  spr.pushImage(0,0,320,240, *image);
-}
 
 void displayImage( void ) {
   
@@ -188,10 +185,11 @@ void displayImage( void ) {
     }
   }
 
-  max_temp = min_temp = (double)(image[0][0]) / 65535;
+  max_temp = max / 65535;
+  min_temp = min / 65535;
 
-  for (int i = 0; i < 160; i++) {
-    for (int j = 0; j < 120; j++) {
+  for (int i = 0; i < image_x; i++) {
+    for (int j = 0; j < image_y; j++) {
       double val = (image[i][j] - min) / (max - min);
       int color;
       if (val == 1.0){
@@ -200,12 +198,6 @@ void displayImage( void ) {
         color = TFT_WHITE;
       } else {
         color = ips.color565(255 * val,0, 255 *(1 - val));
-      }
-      if ((double)(image[i][j]) / 65535 > max_temp){
-        max_temp = (double)(image[i][j]) / 65535;
-      }
-      if ((double)(image[i][j]) / 65535 < min_temp){
-        min_temp = (double)(image[i][j]) / 65535;
       }
 
       spr.drawPixel(2 * i, 2 * j,color);
