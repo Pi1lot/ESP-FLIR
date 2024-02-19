@@ -1,19 +1,4 @@
-/* Used with an ESP-WROOM-32 dev board to interface with a FLIR Lepton 3.5 dev module. 
- * 
- * As of current state, this program will not be finished. It will instead be ported to
- * work with a Teensy 4.1.
- *
- * This is because the ESP-WROOM-32 does not have enough RAM to hold the full size
- * 16-bit color depth frame buffer at the same time as the pixel data for every 
- * pixel in the 160x120 frame. This is an absolute requirement to be able to properly
- * calculate the upper and lower bounds for colors to display on the screen. At the 
- * present, this program only displays the data in 8-bit color depth.
- * 
- * The program could feasibly be finished to work with an ESP-WROOM-32 under the memory
- * constraints, but this would require either the addition of an external SRAM module,
- * or modification of the TFT_eSPI library to accompany pushing scaled sprites to the
- * screen, which at the time of writing (2/17/2024) is not natively supported.
- */
+/* Used with an ESP-WROOM-32 dev board to interface with a FLIR Lepton 3.5 dev module. */
 
 #include <SPI.h>
 #include <Wire.h>
@@ -45,7 +30,6 @@ int image_index;
 #define image_x (160)
 #define image_y (120)
 uint16_t image[image_x][image_y];
-bool doneCapturing = 0;
 
 TFT_eSPI ips = TFT_eSPI();
 TFT_eSprite spr = TFT_eSprite(&ips);
@@ -58,7 +42,7 @@ void leptonSync(void){
   int data = 0x0f00;
 
   digitalWrite(FLIR_NCS_PIN, HIGH);
-  delay(185); // Waits for the required time indicated by datasheet, ensures a timeout of VoSPI I/F
+  delay(300); // Waits for the required time indicated by datasheet, ensures a timeout of VoSPI I/F
   
   while ((data & (0x0f00)) == 0x0f00){ // I changed this because I don't think it was right
 
@@ -87,10 +71,10 @@ void leptonSync(void){
 void captureImage( void ) {
   
   hspi->setDataMode(SPI_MODE3);
-  hspi->setFrequency(20000000);
+  hspi->setFrequency(16000000);
 
-  leptonSync();
-  delay(50);
+  // leptonSync();
+  // delay(50);
   
   bool collectedSegments[4];
   collectedSegments[0] = false;
@@ -101,7 +85,7 @@ void captureImage( void ) {
   uint8_t segmentsRead = 0;
 
   while(!collectedSegments[0] | !collectedSegments[1] | !collectedSegments[2] | !collectedSegments[3]){
-    
+
     // Get 60 valid packets per segment
     // digitalWrite(13, LOW); // Debug indicator
     for (int packetNumber = 0; packetNumber < 60; packetNumber++){
@@ -131,8 +115,35 @@ void captureImage( void ) {
     int segmentNumber = (lepton_frame_segment[20][0] >> 12) & 0b0111; // This should give the segment number which is held at packet 20. The transmitted packets start at number 0.
 
     if (segmentNumber != 0){ // if the segment is number 0, ignore the segment
+      
+      // Serial.println(segmentNumber);
+      // Makes sure that we get the segments in the right order
+      if (segmentNumber == 2) {
+        if (!collectedSegments[0]){ // We haven't found the first segment
+          lastFoundSegment = 0;
+          segmentsRead = 0;
+          leptonSync();
+          break;
+        }
+      } else if (segmentNumber == 3){
+        if (!collectedSegments[0] && !collectedSegments[1]){
+          lastFoundSegment = 0;
+          segmentsRead = 0;
+          leptonSync();
+          break;
+        }
+      } else if (segmentNumber == 4){
+        if (!collectedSegments[0] && !collectedSegments[1] && !collectedSegments[2]){
+          lastFoundSegment = 0;
+          segmentsRead = 0;
+          leptonSync();
+          break;
+        }
+      }
+      
+
       segmentsRead++;
-      if (segmentsRead >= 6) { // This means that we're probably out of sync for some reason
+      if (segmentsRead > 4) { // This means that we're probably out of sync for some reason
         collectedSegments[0] = false;
         collectedSegments[1] = false;
         collectedSegments[2] = false;
@@ -143,7 +154,6 @@ void captureImage( void ) {
         break;
       }
 
-      // Serial.println(segmentNumber);
       if (segmentNumber > 4) {
         leptonSync();
         break;
@@ -171,7 +181,7 @@ void captureImage( void ) {
 
 
 void displayImage( void ) {
-  
+
   double min, max;
   max = min = image[0][0];
   for (int i = 0; i < image_x; i++) {
@@ -189,7 +199,7 @@ void displayImage( void ) {
   min_temp = min / 65535;
 
   for (int i = 0; i < image_x; i++) {
-    for (int j = 0; j < image_y; j++) {
+    for (int j = 0; j < image_y / 2; j++) {
       double val = (image[i][j] - min) / (max - min);
       int color;
       if (val == 1.0){
@@ -210,6 +220,27 @@ void displayImage( void ) {
 
   // ips.fillScreen(WHITE);
   spr.pushSprite(0,0);
+
+  for (int i = 0; i < image_x; i++) {
+    for (int j = 0; j < image_y / 2; j++) {
+      double val = (image[i][image_y / 2 + j] - min) / (max - min);
+      int color;
+      if (val == 1.0){
+        color = TFT_WHITE;
+      } else if (val == 0) {
+        color = TFT_WHITE;
+      } else {
+        color = ips.color565(255 * val,0, 255 *(1 - val));
+      }
+
+      spr.drawPixel(2 * i, 2 * j,color);
+      spr.drawPixel(2 * i + 1, 2 * j, color);
+      spr.drawPixel(2 * i, 2 * j + 1, color);
+      spr.drawPixel(2 * i + 1, 2 * j + 1, color);
+    }
+  }
+
+  spr.pushSprite(0,120);
   
   ips.setCursor(0, 210, 2);
   ips.setTextColor(TFT_WHITE,TFT_BLACK);
@@ -312,11 +343,12 @@ void setup() {
   ips.init();
   ips.setRotation(3);
 
-  spr.setColorDepth(8); // This has to be done because of RAM limitations
-  spr.createSprite(2*image_x, 2*image_y);
+  spr.createSprite(2*image_x, 1*image_y); // Will have to update and show this twice
 
   ips.invertDisplay( true );
   ips.fillScreen(TFT_BLACK);
+
+  leptonSync();
 }
 
 void loop() {
