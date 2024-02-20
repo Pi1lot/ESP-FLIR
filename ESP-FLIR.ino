@@ -177,8 +177,8 @@ void captureImage( void ) {
   }
   // Serial.println("Image Complete");
   hspi->setDataMode(SPI_MODE0);
+  hspi->setFrequency(20000000);
 }
-
 
 void displayImage( void ) {
 
@@ -195,8 +195,8 @@ void displayImage( void ) {
     }
   }
 
-  max_temp = max / 65535;
-  min_temp = min / 65535;
+  max_temp = (max / 100) - 273.15;
+  min_temp = (min / 100) - 273.15;
 
   for (int i = 0; i < image_x; i++) {
     for (int j = 0; j < image_y / 2; j++) {
@@ -210,6 +210,7 @@ void displayImage( void ) {
         color = ips.color565(255 * val,0, 255 *(1 - val));
       }
 
+      // For some reason drawing the pixels instead of using the fillRect method is much more stable
       spr.drawPixel(2 * i, 2 * j,color);
       spr.drawPixel(2 * i + 1, 2 * j, color);
       spr.drawPixel(2 * i, 2 * j + 1, color);
@@ -217,8 +218,6 @@ void displayImage( void ) {
     }
   }
 
-
-  // ips.fillScreen(WHITE);
   spr.pushSprite(0,0);
 
   for (int i = 0; i < image_x; i++) {
@@ -358,7 +357,7 @@ void loop() {
   displayImage();
 
   // transferImage();
-  delay(200);
+  delay(140); // This needs to be looked into, we're having stability issues. Likely switch to timer-based frame capture
 }
 
 
